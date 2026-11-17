@@ -140,11 +140,17 @@ const game = checkGameTree();
 const shots = checkScreenshots();
 
 // Start from a clean output directory so a stale file can never ride along.
-// Never remove the output directory itself: in the grader's sandbox /output is a
-// mounted directory, and deleting a mount point throws EBUSY ("Device or resource
-// busy"). Clear only its contents, one child at a time, then make sure it exists.
+// The folder itself stays put: the grader mounts it, and removing a mount
+// point fails with EBUSY. So sweep out only the entries inside it, one by
+// one, leaving the directory (and its mount) untouched.
+function sweepDirContents(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    rmSync(join(dir, entry.name), { recursive: true, force: true });
+  }
+}
+
 mkdirSync(out, { recursive: true });
-for (const child of readdirSync(out)) rmSync(join(out, child), { recursive: true, force: true });
+sweepDirContents(out);
 copyTreeSorted(gameDir, join(out, 'game'));
 copyTreeSorted(shotsDir, join(out, 'screenshots'));
 
