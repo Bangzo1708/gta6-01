@@ -1,47 +1,118 @@
-// Shared helpers: a seeded RNG (deterministic city), math and colour helpers.
-// Palmera Bay is an original game; every name, place and character here is invented.
+// util.js — small math and random helpers shared by every Palmera Bay module.
+// Everything here is pure and deterministic: the same seed always gives the same city.
+
+export function clamp(value, min, max) {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+export function dist(ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+export function angleTo(ax, ay, bx, by) {
+  return Math.atan2(by - ay, bx - ax);
+}
+
+// Shortest signed difference between two angles, in (-PI, PI].
+export function angleDiff(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d <= -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+// Turn `angle` toward `target` by at most `step` radians.
+export function turnToward(angle, target, step) {
+  const d = angleDiff(angle, target);
+  if (Math.abs(d) <= step) return target;
+  return angle + Math.sign(d) * step;
+}
+
+// Seeded PRNG (mulberry32). Used for the city layout and screenshot scenes so a
+// given seed always builds the same Palmera Bay.
 export function mulberry32(seed) {
   let a = seed >>> 0;
-  return function () {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
+  return function next() {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-export const TAU = Math.PI * 2;
-export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-export const lerp = (a, b, t) => a + (b - a) * t;
-export const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
-export const angleTo = (ax, ay, bx, by) => Math.atan2(by - ay, bx - ax);
-export function angleDiff(a, b) {
-  let d = (b - a) % TAU;
-  if (d > Math.PI) d -= TAU;
-  if (d < -Math.PI) d += TAU;
-  return d;
+export function randRange(rng, min, max) {
+  return min + rng() * (max - min);
 }
-export function turnToward(angle, target, maxStep) {
-  const d = angleDiff(angle, target);
-  return angle + clamp(d, -maxStep, maxStep);
+
+export function randInt(rng, min, max) {
+  return Math.floor(randRange(rng, min, max + 1));
 }
-export function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
-export function shade(hex, f) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = clamp(Math.round(((n >> 16) & 255) * f), 0, 255);
-  const g = clamp(Math.round(((n >> 8) & 255) * f), 0, 255);
-  const b = clamp(Math.round((n & 255) * f), 0, 255);
-  return `rgb(${r},${g},${b})`;
+
+export function pickOne(rng, list) {
+  return list[Math.floor(rng() * list.length)];
 }
-// Deterministic per-cell hash -> 0..1, for stable visual variety without storing it.
-export function hash2(x, y) {
-  let h = (x * 374761393 + y * 668265263) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+
+export function chance(rng, p) {
+  return rng() < p;
 }
-export function fmtMoney(n) { return '$' + Math.floor(n).toLocaleString('en-US'); }
-export function fmtTime(sec) {
-  const h = Math.floor(sec / 3600) % 24;
-  const m = Math.floor(sec / 60) % 60;
-  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+
+// Format a money amount as $1,234.
+export function moneyString(amount) {
+  const n = Math.floor(amount);
+  return '$' + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// Format seconds of play as H:MM:SS.
+export function clockString(totalSeconds) {
+  const s = Math.floor(totalSeconds % 60);
+  const m = Math.floor(totalSeconds / 60) % 60;
+  const h = Math.floor(totalSeconds / 3600);
+  const pad = (v) => (v < 10 ? '0' + v : '' + v);
+  return h + ':' + pad(m) + ':' + pad(s);
+}
+
+// Circle vs axis-aligned rectangle collision test.
+export function circleHitsRect(cx, cy, r, rect) {
+  const nx = clamp(cx, rect.x, rect.x + rect.w);
+  const ny = clamp(cy, rect.y, rect.y + rect.h);
+  const dx = cx - nx;
+  const dy = cy - ny;
+  return dx * dx + dy * dy < r * r;
+}
+
+// Push a circle out of a rectangle; returns true when a push happened.
+export function resolveCircleRect(circle, rect) {
+  const nx = clamp(circle.x, rect.x, rect.x + rect.w);
+  const ny = clamp(circle.y, rect.y, rect.y + rect.h);
+  let dx = circle.x - nx;
+  let dy = circle.y - ny;
+  let d2 = dx * dx + dy * dy;
+  if (d2 >= circle.r * circle.r) return false;
+  if (d2 < 0.0001) {
+    // Centre is inside the rectangle: push out along the smallest penetration.
+    const left = circle.x - rect.x;
+    const right = rect.x + rect.w - circle.x;
+    const top = circle.y - rect.y;
+    const bottom = rect.y + rect.h - circle.y;
+    const min = Math.min(left, right, top, bottom);
+    if (min === left) circle.x = rect.x - circle.r;
+    else if (min === right) circle.x = rect.x + rect.w + circle.r;
+    else if (min === top) circle.y = rect.y - circle.r;
+    else circle.y = rect.y + rect.h + circle.r;
+    return true;
+  }
+  const d = Math.sqrt(d2);
+  const push = (circle.r - d) / d;
+  circle.x += dx * push;
+  circle.y += dy * push;
+  return true;
 }

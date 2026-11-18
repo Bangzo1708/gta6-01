@@ -1,268 +1,262 @@
-// The story of Palmera Bay: six missions, told through dialogue and objectives.
-// Rico Vane, a wheelman fresh out of the county lockup, owes $20,000 to the Marlin Crew
-// and has one week to pay it back — or swim with the fishes. All characters are invented.
-import { dist, clamp } from './util.js';
-import { makePed, makeCar, burst, spawnPickup } from './entities.js';
+// missions.js — the story of Palmera Bay: four jobs for Leo Marlow, from a
+// welcome-home errand to a bank-van heist. Each mission is a list of steps; a
+// step is a place to reach, a car to steal, thugs to deal with, or an escape.
+// Dialog plays in the box at the bottom of the screen; the waypoint marker and
+// the minimap always point at the current objective.
 
-export const MISSIONS = [
+import { dist } from './util.js';
+import { landmarkById } from './city.js';
+import { spawnThug } from './peds.js';
+import { spawnParkedCar, spawnPoliceCar } from './vehicles.js';
+import { spawnHealthPickup, spawnCashPickup } from './entities.js';
+import { playMission, playFail, playCash } from './audio.js';
+import { addWanted } from './peds.js';
+import { writeSave } from './save.js';
+
+export const MISSION_DEFS = [
   {
-    id: 'm1', title: 'Welcome Back', reward: 500,
-    intro: [
-      ['RICO', 'Three years inside. The Bay smells the same — salt, gasoline and bad decisions.'],
-      ['MANNY', 'Rico! You look terrible. The Marlin Crew still wants their twenty grand, amigo.'],
-      ['RICO', 'Then I better start driving. Point me at the first job.'],
+    id: 'welcome-home',
+    title: 'Welcome Home',
+    giver: 'Rosa',
+    reward: 150,
+    briefing: [
+      { who: 'Rosa', text: "Leo! You're back in Palmera Bay. Ten years away and the city still smells like salt and trouble." },
+      { who: 'Leo', text: 'Good to see you, Rosa. I need work. Real work.' },
+      { who: 'Rosa', text: "Then start simple. Drive to my diner and pick up the keys to your old place. Don't keep an old woman waiting." },
     ],
     steps: [
-      { type: 'goto', x: 1620, y: 2380, label: 'Meet Manny at Club Eclipse', radius: 90 },
-      { type: 'talk', x: 1620, y: 2380, label: 'Talk to Manny', radius: 110,
-        lines: [['MANNY', 'First job is easy: my cousin left a Comet GT by the marina. Bring it to my garage.'], ['RICO', 'Stealing already? I have not even had breakfast.']] },
-      { type: 'steal', x: 420, y: 260, label: 'Steal the Comet GT at the marina', radius: 60 },
-      { type: 'deliver', x: 2380, y: 1620, label: 'Deliver the car to the chop shop', radius: 110,
-        outro: [['MANNY', 'Clean work. The Crew notices drivers like you. Here is your cut.']] },
+      { type: 'goto', place: 'diner', text: 'Drive to Rosa\'s Diner', radius: 90 },
+      { type: 'talk', place: 'diner', text: 'Talk to Rosa (press E)', radius: 90,
+        lines: [
+          { who: 'Rosa', text: "Here's the safehouse key, mijo. Your uncle's old flat above the market. And Leo — stay out of the Yards after dark." },
+          { who: 'Leo', text: "Thanks, Rosa. I owe you one." },
+        ] },
     ],
   },
   {
-    id: 'm2', title: 'Hot Wheels', reward: 1200,
-    intro: [
-      ['MANNY', 'A rich kid parks a Street Hawk by the beach every afternoon. Rich kids insure. We profit.'],
-      ['RICO', 'One car. No witnesses, no cops. Got it.'],
+    id: 'hot-wheels',
+    title: 'Hot Wheels',
+    giver: 'Eddie Voss',
+    reward: 400,
+    briefing: [
+      { who: 'Eddie Voss', text: "Leo Marlow. Rosa says you're looking for work. I need a Comet, cherry red, parked by the pier. Bring it to my garage. No questions." },
+      { who: 'Leo', text: 'Steal a car on my first day back? You drive a hard bargain, Eddie.' },
+      { who: 'Eddie Voss', text: "It's not stealing. It's... relocating. The cops might disagree. Drive fast." },
     ],
     steps: [
-      { type: 'steal', x: 420, y: 3120, label: 'Take the Street Hawk at the Driftwood Bar', radius: 60, quiet: true },
-      { type: 'deliver', x: 2380, y: 1620, label: 'Bring it to the chop shop — stay cool', radius: 110,
-        outro: [['MANNY', 'That Hawk will fund three more jobs. You drive like you were born in it.']] },
+      { type: 'steal', place: 'pier', text: 'Steal the red Comet at the pier', radius: 110, carModel: 'Comet', carColor: '#d94f3d' },
+      { type: 'deliver', place: 'garage', text: 'Deliver the Comet to Voss Auto Garage', radius: 100, needCar: true },
     ],
   },
   {
-    id: 'm3', title: 'Payback at Dock 9', reward: 2500,
-    intro: [
-      ['RICO', 'The Vipers jumped Manny last night. They are holed up at Dock 9 with his money.'],
-      ['MANNY', 'Take my pistol. Make them regret it. And Rico — come back alive.'],
+    id: 'debt-collection',
+    title: 'Debt Collection',
+    giver: 'Eddie Voss',
+    reward: 650,
+    briefing: [
+      { who: 'Eddie Voss', text: 'The Mercado crew owes me. Three of them hang around the square, collecting for someone else now.' },
+      { who: 'Eddie Voss', text: 'Go remind them who they work for. Fists or the pistol, your call. Bring me the cash they owe.' },
+      { who: 'Leo', text: 'Three against one. Fair odds.' },
     ],
     steps: [
-      { type: 'goto', x: 2620, y: 1180, label: 'Reach the Dock 9 warehouse', radius: 130 },
-      { type: 'kill', x: 2620, y: 1180, label: 'Deal with the Vipers (0/4)', radius: 260, count: 4,
-        outro: [['RICO', 'Four down. Manny, your money is coming home.']] },
-      { type: 'collect', x: 2620, y: 1180, label: 'Grab the cash bags (0/2)', radius: 200, count: 2 },
-      { type: 'deliver', x: 520, y: 1520, label: 'Stash the cash at the safehouse', radius: 110,
-        outro: [['MANNY', 'The Vipers will think twice now. The Bay is talking about you, Rico.']] },
+      { type: 'goto', place: 'market', text: 'Go to Mercado Square', radius: 110 },
+      { type: 'kill', place: 'market', text: 'Deal with the Mercado crew (0/3)', radius: 260, thugs: 3, spawned: false },
+      { type: 'goto', place: 'garage', text: 'Return to Voss Auto Garage', radius: 100 },
     ],
   },
   {
-    id: 'm4', title: 'The Getaway', reward: 3000,
-    intro: [
-      ['MANNY', 'Bad news — Bay PD raided the garage. They know your face now. Lose them and get to the safehouse.'],
-      ['RICO', 'Three stars and a full tank. Let us see what this Comet can do.'],
+    id: 'the-big-score',
+    title: 'The Big Score',
+    giver: 'Eddie Voss',
+    reward: 1500,
+    briefing: [
+      { who: 'Eddie Voss', text: 'One last job, Leo. A Bay Trust van runs the downtown route at dusk. Hit it, take the cash, and vanish.' },
+      { who: 'Eddie Voss', text: 'The whole PD will be on you. Lose them, get to your safehouse, and we are both rich men.' },
+      { who: 'Leo', text: 'Then let\'s make Palmera Bay remember my name.' },
     ],
     steps: [
-      { type: 'escape', x: 520, y: 1520, label: 'Lose the cops, then reach the safehouse', radius: 110,
-        outro: [['RICO', 'They lost me in the marina fog. The Crew owes me a drink.']] },
-    ],
-  },
-  {
-    id: 'm5', title: 'Bayfront Heist', reward: 6000,
-    intro: [
-      ['MANNY', 'The big one. A courier van carries the Crew\'s cut through Downtown at noon. Three stops. Grab the bags, vanish.'],
-      ['RICO', 'Three bags, one city, zero room for mistakes. I am in.'],
-    ],
-    steps: [
-      { type: 'collect', x: 1400, y: 600, label: 'Intercept the courier — grab bag 1 (0/3)', radius: 220, count: 3, spread: true },
-      { type: 'deliver', x: 520, y: 1520, label: 'Deliver the bags to the safehouse', radius: 110,
-        outro: [['MANNY', 'Six grand in one afternoon. The Marlin Crew is almost paid off, amigo.']] },
-    ],
-  },
-  {
-    id: 'm6', title: 'King of the Bay', reward: 12000,
-    intro: [
-      ['RICO', 'One last job. The Viper boss, Duke Marlowe, is at the airfield with the Crew\'s final payment — and a small army.'],
-      ['MANNY', 'Finish this and you are free, Rico. The Bay is yours.'],
-    ],
-    steps: [
-      { type: 'goto', x: 2820, y: 2820, label: 'Reach Palmera Airfield', radius: 160 },
-      { type: 'kill', x: 2820, y: 2820, label: 'Take down Duke\'s crew (0/6)', radius: 320, count: 6,
-        outro: [['DUKE', 'You... you actually did it. The Bay was never mine. It was always yours.']] },
-      { type: 'deliver', x: 520, y: 1520, label: 'Bring the final payment home', radius: 110,
-        outro: [['MANNY', 'Twenty grand. Paid in full. Rico Vane — King of the Bay.']] },
+      { type: 'goto', place: 'bank', text: 'Reach Bay Trust Bank downtown', radius: 110 },
+      { type: 'rob', place: 'bank', text: 'Grab the cash from the van (press E)', radius: 90 },
+      { type: 'escape', place: 'safehouse', text: 'Lose the cops and reach the safehouse', radius: 110 },
     ],
   },
 ];
 
-export class MissionEngine {
-  constructor(world) {
-    this.world = world;
-    this.index = 0; // which mission is active (-1 = story complete)
-    this.step = 0;
-    this.active = false;
-    this.marker = null;
-    this.dialogue = null; // {lines, i, t}
-    this.stepState = {};
-    this.escapeTimer = 0;
-    this.banner = null; // {text, sub, t}
+export function startMission(state, index) {
+  const def = MISSION_DEFS[index];
+  if (!def) return;
+  state.missionIndex = index;
+  state.mission = {
+    def,
+    stepIndex: 0,
+    stepState: {},
+    thugsLeft: 0,
+    robbed: false,
+    startedAt: state.time,
+  };
+  state.dialog = { lines: def.briefing, index: 0, missionStart: true };
+  state.banner = { text: 'NEW MISSION: ' + def.title, sub: 'From ' + def.giver + ' — reward ' + def.reward, t: 3.2, kind: 'mission' };
+  playMission(state.audio);
+}
+
+export function missionObjectiveText(state) {
+  if (!state.mission) return ''; // no active mission: the "Press M" hint covers it
+  const step = state.mission.def.steps[state.mission.stepIndex];
+  if (!step) return '';
+  if (step.type === 'kill') {
+    const left = state.mission.thugsLeft;
+    const total = step.thugs;
+    return 'Deal with the Mercado crew (' + (total - left) + '/' + total + ')';
   }
-  current() { return this.index >= 0 && this.index < MISSIONS.length ? MISSIONS[indexSafe(this.index)] : null; }
-  startMission(i) {
-    const m = MISSIONS[i];
-    this.index = i; this.step = 0; this.active = true; this.stepState = {};
-    this.showDialogue(m.intro);
-    this.setupStep();
-    this.banner = { text: 'MISSION: ' + m.title, sub: 'Reward ' + '$' + m.reward.toLocaleString('en-US'), t: 3.2 };
-    if (this.world.sounds) this.world.sounds.missionDone();
+  return step.text;
+}
+
+export function missionMarker(state) {
+  if (!state.mission) return null;
+  const step = state.mission.def.steps[state.mission.stepIndex];
+  if (!step || !step.place) return null;
+  const lm = landmarkById(state.city, step.place);
+  if (!lm) return null;
+  return { x: lm.x, y: lm.y, name: lm.name, radius: step.radius || 100 };
+}
+
+// Advance the dialog box; returns true when the dialog just finished.
+export function advanceDialog(state) {
+  if (!state.dialog) return false;
+  state.dialog.index += 1;
+  if (state.dialog.index >= state.dialog.lines.length) {
+    const wasMissionStart = state.dialog.missionStart;
+    state.dialog = null;
+    return wasMissionStart;
   }
-  setupStep() {
-    const m = this.current();
-    if (!m) return;
-    const s = m.steps[this.step];
-    if (!s) { this.completeMission(); return; }
-    this.stepState = { kills: 0, bags: 0, spawned: false, targetCar: null, gang: [] };
-    this.marker = { x: s.x, y: s.y, label: s.label, radius: s.radius || 90 };
-    if (s.type === 'steal') {
-      const car = makeCar(s.x, s.y, 0, { model: this.world.rng ? undefined : undefined, color: '#f1c40f', parked: true, driver: 'none' });
-      // Force a flashy model for the target car.
-      car.model = { name: s.quiet ? 'Street Hawk' : 'Comet GT', top: 560, accel: 340, len: 44, w: 21 };
-      car.len = 44; car.w = 21;
-      this.world.cars.push(car);
-      this.stepState.targetCar = car;
-      this.marker.x = car.x; this.marker.y = car.y;
+  return false;
+}
+
+function stepTarget(state, step) {
+  const lm = landmarkById(state.city, step.place);
+  return lm ? { x: lm.x, y: lm.y } : null;
+}
+
+export function updateMission(state, dt, input) {
+  if (!state.mission) return;
+  const mission = state.mission;
+  const step = mission.def.steps[mission.stepIndex];
+  if (!step) {
+    completeMission(state);
+    return;
+  }
+  const player = state.player;
+
+  if (step.type === 'goto' || step.type === 'deliver' || step.type === 'escape') {
+    const target = stepTarget(state, step);
+    if (!target) return;
+    const d = dist(player.x, player.y, target.x, target.y);
+    if (step.type === 'deliver' && !player.car) {
+      // Lost the car: fail the delivery step back to a steal.
+      state.banner = { text: 'YOU LOST THE CAR', sub: 'Find another ride and come back', t: 2.5, kind: 'fail' };
+      mission.stepIndex = 0;
+      mission.stepState = {};
+      return;
     }
-    if (s.type === 'kill') {
-      const gang = [];
-      for (let i = 0; i < s.count; i++) {
-        const ped = makePed(s.x + (this.world.rng() - 0.5) * 260, s.y + (this.world.rng() - 0.5) * 260, this.world.rng);
-        ped.gang = true; ped.state = 'walk';
-        ped.shirt = '#8e44ad'; ped.health = 100;
-        this.world.peds.push(ped);
-        gang.push(ped);
+    if (step.type === 'escape' && state.wanted > 0) {
+      // The escape only counts once the heat is off.
+      return;
+    }
+    if (d < step.radius) {
+      advanceStep(state);
+    }
+  } else if (step.type === 'talk') {
+    const target = stepTarget(state, step);
+    if (!target) return;
+    if (dist(player.x, player.y, target.x, target.y) < step.radius && input.pressed.has('e')) {
+      input.pressed.delete('e');
+      state.dialog = { lines: step.lines, index: 0, missionStart: false };
+      advanceStep(state);
+    }
+  } else if (step.type === 'steal') {
+    if (!mission.stepState.car) {
+      const target = stepTarget(state, step);
+      const car = spawnParkedCar(state, Math.random, target.x + 40, target.y + 30, 0.4);
+      car.model = step.carModel || 'Comet';
+      car.color = step.carColor || '#d94f3d';
+      mission.stepState.car = car;
+      mission.stepState.carId = car.id;
+    }
+    const car = mission.stepState.car;
+    if (player.car === car) {
+      advanceStep(state);
+    }
+  } else if (step.type === 'kill') {
+    if (!step.spawned) {
+      step.spawned = true;
+      const target = stepTarget(state, step);
+      mission.thugsLeft = step.thugs;
+      for (let i = 0; i < step.thugs; i++) {
+        const thug = spawnThug(state, target.x + (i - 1) * 70, target.y + 60 + (i % 2) * 50, 120);
+        thug.missionThug = true;
       }
-      this.stepState.gang = gang;
+      spawnHealthPickup(state, target.x - 120, target.y - 40);
     }
-    if (s.type === 'collect') {
-      const n = s.count;
-      for (let i = 0; i < n; i++) {
-        const ox = s.spread ? (i - (n - 1) / 2) * 420 : (this.world.rng() - 0.5) * 220;
-        const oy = s.spread ? (this.world.rng() - 0.5) * 120 : (this.world.rng() - 0.5) * 220;
-        spawnPickup(this.world, s.x + ox, s.y + oy, 'cashbag');
-      }
+    const left = state.peds.filter((p) => p.missionThug && !p.dead).length;
+    mission.thugsLeft = left;
+    if (left === 0) advanceStep(state);
+  } else if (step.type === 'rob') {
+    if (!mission.stepState.van) {
+      const target = stepTarget(state, step);
+      const van = spawnParkedCar(state, Math.random, target.x - 60, target.y + 40, Math.PI / 2);
+      van.model = 'Van';
+      van.color = '#2d3436';
+      mission.stepState.van = van;
+      state.banner = { text: 'THE VAN IS HERE', sub: 'Get close and press E to grab the cash', t: 3.0, kind: 'info' };
     }
-    if (s.type === 'escape') {
-      this.world.setWanted(3);
-      this.escapeTimer = 0;
+    const van = mission.stepState.van;
+    if (!mission.robbed && dist(player.x, player.y, van.x, van.y) < 80 && input.pressed.has('e')) {
+      input.pressed.delete('e');
+      mission.robbed = true;
+      spawnCashPickup(state, van.x, van.y, 800);
+      addWanted(state, 4);
+      state.banner = { text: '$800 GRABBED', sub: 'Four stars — lose the cops!', t: 3.0, kind: 'wanted' };
+      playCash(state.audio);
+      advanceStep(state);
     }
-  }
-  showDialogue(lines) {
-    this.dialogue = { lines, i: 0, t: 0 };
-  }
-  advanceDialogue() {
-    if (!this.dialogue) return;
-    this.dialogue.i++;
-    this.dialogue.t = 0;
-    if (this.dialogue.i >= this.dialogue.lines.length) this.dialogue = null;
-  }
-  completeStep() {
-    const m = this.current();
-    const s = m.steps[this.step];
-    if (s && s.outro) this.showDialogue(s.outro);
-    this.step++;
-    if (this.step >= m.steps.length) this.completeMission();
-    else this.setupStep();
-  }
-  completeMission() {
-    const m = this.current();
-    this.world.money += m.reward;
-    this.world.missionsDone = (this.world.missionsDone || 0) + 1;
-    this.active = false;
-    this.marker = null;
-    this.banner = { text: 'MISSION PASSED', sub: m.title + '  •  +$' + m.reward.toLocaleString('en-US'), t: 4 };
-    if (this.world.sounds) { this.world.sounds.missionDone(); this.world.sounds.cash(); }
-    this.world.saveGame();
-    this.index++;
-    this.step = 0;
-    if (this.index >= MISSIONS.length) {
-      this.world.storyComplete = true;
-      this.world.mode = 'complete';
-      this.banner = { text: 'KING OF THE BAY', sub: 'Story complete — free roam continues. Thanks for playing!', t: 6 };
-    }
-  }
-  // Called every frame while playing. Returns the current objective text.
-  update(dt) {
-    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
-    if (this.dialogue) { this.dialogue.t += dt; return this.objectiveText(); }
-    if (!this.active || this.index < 0 || this.index >= MISSIONS.length) return this.objectiveText();
-    const m = MISSIONS[this.index];
-    const s = m.steps[this.step];
-    if (!s) return this.objectiveText();
-    const w = this.world;
-    const p = w.player;
-    const px = p.car ? p.car.x : p.x;
-    const py = p.car ? p.car.y : p.y;
-    const d = dist(px, py, s.x, s.y);
-    switch (s.type) {
-      case 'goto':
-      case 'talk':
-        if (d < (s.radius || 90)) {
-          if (s.type === 'goto' || w.input.justPressed('KeyE')) this.completeStep();
-        }
-        break;
-      case 'steal':
-        if (this.stepState.targetCar && p.car === this.stepState.targetCar) {
-          if (!s.quiet) w.addWanted(1);
-          this.completeStep();
-        }
-        break;
-      case 'deliver': {
-        const needCar = this.stepState.targetCar;
-        const inCar = needCar ? p.car === needCar : !!p.car || true;
-        if (d < (s.radius || 110) && inCar) this.completeStep();
-        break;
-      }
-      case 'kill': {
-        const alive = this.stepState.gang.filter((g) => !g.dead).length;
-        const done = s.count - alive;
-        this.marker.label = s.label.replace(/\(\d+\/\d+\)/, `(${done}/${s.count})`);
-        if (alive <= 0) this.completeStep();
-        break;
-      }
-      case 'collect': {
-        const got = this.stepState.bags;
-        this.marker.label = s.label.replace(/\(\d+\/\d+\)/, `(${got}/${s.count})`);
-        if (got >= s.count) this.completeStep();
-        break;
-      }
-      case 'escape': {
-        this.escapeTimer += dt;
-        if (w.wanted === 0 && this.escapeTimer > 4) {
-          if (d < (s.radius || 110)) this.completeStep();
-          else this.marker.label = 'Cops lost — reach the safehouse';
-        } else {
-          this.marker.label = 'Lose the cops! Wanted: ' + '★'.repeat(w.wanted);
-        }
-        break;
-      }
-    }
-    return this.objectiveText();
-  }
-  objectiveText() {
-    if (this.index >= MISSIONS.length) return 'Story complete — free roam. Press M for the mission list.';
-    if (!this.active) return 'Go to the yellow M marker to start: ' + MISSIONS[this.index].title;
-    const m = MISSIONS[this.index];
-    const s = m.steps[this.step];
-    return s ? s.label : '';
-  }
-  missionMarker() {
-    if (this.active && this.marker) return this.marker;
-    if (this.index < MISSIONS.length) {
-      const start = missionStartPoint(this.index);
-      return { x: start.x, y: start.y, label: 'Start: ' + MISSIONS[this.index].title, radius: 120, start: true };
-    }
-    return null;
   }
 }
 
-function indexSafe(i) { return clamp(i, 0, MISSIONS.length - 1); }
+function advanceStep(state) {
+  const mission = state.mission;
+  mission.stepIndex += 1;
+  mission.stepState = {};
+  if (mission.stepIndex >= mission.def.steps.length) {
+    completeMission(state);
+  } else {
+    playMission(state.audio);
+  }
+}
 
-export function missionStartPoint(i) {
-  const starts = [
-    { x: 1620, y: 2380 }, { x: 420, y: 3120 }, { x: 2620, y: 1180 },
-    { x: 2380, y: 1620 }, { x: 1400, y: 600 }, { x: 2820, y: 2820 },
-  ];
-  return starts[clamp(i, 0, starts.length - 1)];
+function completeMission(state) {
+  const mission = state.mission;
+  const def = mission.def;
+  state.money += def.reward;
+  state.missionsDone += 1;
+  state.stats.missionsDone = state.missionsDone;
+  state.mission = null;
+  state.missionIndex += 1;
+  state.banner = { text: 'MISSION PASSED: ' + def.title, sub: 'Earned $' + def.reward, t: 3.5, kind: 'success' };
+  playCash(state.audio);
+  writeSave(state);
+  if (state.missionIndex < MISSION_DEFS.length) {
+    state.nextMissionHint = true;
+  } else {
+    state.banner = { text: 'PALMERA BAY IS YOURS', sub: 'Every job done — $' + def.reward + ' for the last one', t: 4.0, kind: 'success' };
+  }
+}
+
+// Fail the current mission (player wasted or busted mid-job).
+export function failMission(state, reason) {
+  if (!state.mission) return;
+  const def = state.mission.def;
+  state.mission = null;
+  state.missionIndex = Math.max(0, state.missionIndex);
+  playFail(state.audio);
+  state.failedMission = { def, reason };
 }

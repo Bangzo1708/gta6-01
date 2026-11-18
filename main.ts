@@ -1,165 +1,130 @@
-// Palmera Bay — the make.fun gta6-01 entry program (Node 22, standard library only).
+// Palmera Bay — a gta6-01 entry (Node 22, standard library only).
 //
-// The game is this repository's game/ folder: a complete open-world crime game that
-// plays offline in a desktop browser (game/index.html and its ES modules, no library,
-// no network request). The program hands it in: it copies game/ and screenshots/ from
-// beside this file to /output and writes /output/dossier.json, the summary the judge
-// reads, with the vendored make.fun library (vendor/makefun-game.ts, copied byte for
-// byte from the kit and never rewritten).
+// The game is this repository's game/ folder: plain static files a desktop
+// browser loads offline (game/index.html and its ES modules, no library and no
+// network request). This program hands it in: it copies game/ and screenshots/
+// from beside this file to /output and writes /output/dossier.json, the summary
+// the judge reads, with the vendored make.fun library.
 //
-// What the game is: Rico Vane, a wheelman fresh out of lockup, owes $20,000 to the
-// Marlin Crew and has one week in the sun-soaked city of Palmera Bay to pay it back.
-// Six story missions, a city to explore on foot and by car, traffic and pedestrians,
-// cars to steal, a five-star wanted system with police chases, combat, a HUD with a
-// live minimap, day and night, synthesized sound and music, a start screen and a save.
-//
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
+// Serve the game locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 //
-// The program is deterministic: it copies files in sorted path order and the dossier
-// builder writes canonical bytes, so running it twice writes identical bytes to /output.
+// The program runs twice and both runs must write the same bytes, so it does
+// nothing time- or order-dependent: it copies the same files in the same order
+// and lets buildDossier do the only writing that could vary (it cannot — the
+// dossier is a pure function of the copied files).
 
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
-const gameDir = join(here, 'game');
-const shotsDir = join(here, 'screenshots');
+const out = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes;
-// the others refuse an entry the scorer would refuse (more than 4 screenshots or one
-// over 256 KiB; more than 993 files in game/ or 48 MiB of game files, in all, or a
-// path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap,
-// its screenshots/ and dossier.json).
-const DOSSIER_CAPS = {
-  text_max_bytes: 163840,
-  screenshots: { max: 4, max_bytes: 262144 },
-  game_max_files: 993,
-  game_max_bytes: 50331648,
-  game_path_max_bytes: 1000,
+// The gate's own caps, from the kit's reference/gate.json. The program refuses
+// to hand in an entry the scorer would refuse, instead of writing it and
+// hoping: too many screenshots, one over 256 KiB, or a game/ over its file or
+// byte budget all fail here, loudly, before any output is written.
+const LIMITS = {
+  textMaxBytes: 163840,
+  maxScreenshots: 4,
+  maxScreenshotBytes: 262144,
+  maxGameFiles: 993,
+  maxGameBytes: 50331648,
+  maxGamePathBytes: 1000,
 };
 
-// A screenshot name the gate accepts: letters, digits and . _ -, 1 to 128 chars,
-// never starting with . or -. The first by name is the cover.
-const SHOT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const SHOT_MAGIC = { png: [0x89, 0x50, 0x4e, 0x47], jpeg: [0xff, 0xd8, 0xff] };
-
 function fail(message) {
-  throw new Error(`main.ts: ${message}`);
+  throw new Error('palmera-bay main.ts: ' + message);
 }
 
-function checkGameTree() {
-  if (!existsSync(gameDir) || !lstatSync(gameDir).isDirectory()) fail('game/ is missing: the playable game lives in game/, its index.html at the root');
-  const index = join(gameDir, 'index.html');
-  if (!existsSync(index) || !lstatSync(index).isFile()) fail('game/index.html is missing');
-  if (statSync(index).size > 1024 * 1024) fail('game/index.html is over the 1 MiB the gate allows');
-  // Every entry under game/ must be a plain file or directory — no symlinks.
-  const stack = [''];
-  let entries = 0;
+function countGameFiles(dir, prefix) {
+  let files = 0;
   let bytes = 0;
-  while (stack.length > 0) {
-    const rel = stack.pop();
-    const dir = rel === '' ? gameDir : join(gameDir, rel);
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = rel === '' ? entry.name : `${rel}/${entry.name}`;
-      entries += 1;
-      if (entry.isSymbolicLink()) fail(`game/${path} is a symbolic link: game/ holds plain files and directories only`);
-      if (entry.isDirectory()) { stack.push(path); continue; }
-      if (!entry.isFile()) fail(`game/${path} is not a plain file`);
-      bytes += statSync(join(gameDir, path)).size;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    const rel = prefix ? prefix + '/' + entry.name : entry.name;
+    if (Buffer.byteLength(rel, 'utf8') > LIMITS.maxGamePathBytes) {
+      fail('game path over 1000 bytes: ' + rel);
+    }
+    if (entry.isDirectory()) {
+      files += 1;
+      const sub = countGameFiles(path, rel);
+      files += sub.files;
+      bytes += sub.bytes;
+    } else if (entry.isFile()) {
+      files += 1;
+      bytes += statSync(path).size;
+    } else {
+      fail('game/ holds a non-file, non-directory entry: ' + rel);
     }
   }
-  if (entries > DOSSIER_CAPS.game_max_files) fail(`game/ holds ${entries} entries, over the ${DOSSIER_CAPS.game_max_files} the gate allows`);
-  if (bytes > DOSSIER_CAPS.game_max_bytes) fail(`game/ is ${bytes} bytes, over the ${DOSSIER_CAPS.game_max_bytes} the gate allows`);
-  return { entries, bytes };
+  return { files, bytes };
 }
 
-function checkScreenshots() {
-  if (!existsSync(shotsDir) || !lstatSync(shotsDir).isDirectory()) fail('screenshots/ is missing: 3 or 4 real renders of the game belong there');
-  const names = readdirSync(shotsDir).filter((n) => !n.startsWith('.')).sort();
-  if (names.length < 3 || names.length > DOSSIER_CAPS.screenshots.max) {
-    fail(`screenshots/ holds ${names.length} images: the gate wants 3 or 4`);
+function checkScreenshots(dir) {
+  if (!existsSync(dir)) fail('screenshots/ is missing from the repository');
+  const names = readdirSync(dir)
+    .filter((name) => !name.startsWith('.'))
+    .sort();
+  if (names.length < 3 || names.length > LIMITS.maxScreenshots) {
+    fail('screenshots/ must hold 3 or 4 images, found ' + names.length);
   }
   for (const name of names) {
-    if (!SHOT_NAME.test(name)) fail(`screenshots/${name}: a name the gate refuses (letters, digits and . _ -, not starting with . or -)`);
-    const file = join(shotsDir, name);
-    if (!lstatSync(file).isFile()) fail(`screenshots/${name} is not a plain file`);
-    const bytes = readFileSync(file);
-    if (bytes.length > DOSSIER_CAPS.screenshots.max_bytes) {
-      fail(`screenshots/${name} is ${bytes.length} bytes, over the ${DOSSIER_CAPS.screenshots.max_bytes} the gate allows`);
+    if (!/^[A-Za-z0-9._-]+$/.test(name) || name.startsWith('-')) {
+      fail('bad screenshot name: ' + name);
     }
-    const isPng = SHOT_MAGIC.png.every((b, i) => bytes[i] === b);
-    const isJpeg = SHOT_MAGIC.jpeg.every((b, i) => bytes[i] === b);
-    if (!isPng && !isJpeg) fail(`screenshots/${name} is neither a PNG nor a JPEG`);
+    const size = statSync(join(dir, name)).size;
+    if (size > LIMITS.maxScreenshotBytes) {
+      fail('screenshot over 256 KiB: ' + name + ' (' + size + ' bytes)');
+    }
   }
   return names;
 }
 
-// Copy a directory tree in sorted path order so the output is stable run to run.
-function copyTreeSorted(src, dest) {
-  mkdirSync(dest, { recursive: true });
-  for (const entry of readdirSync(src, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
-    const from = join(src, entry.name);
-    const to = join(dest, entry.name);
-    if (entry.isDirectory()) copyTreeSorted(from, to);
-    else if (entry.isFile()) cpSync(from, to);
-    else fail(`${from} is not a plain file or directory`);
+function main() {
+  const gameDir = join(here, 'game');
+  const shotsDir = join(here, 'screenshots');
+  if (!existsSync(join(gameDir, 'index.html'))) fail('game/index.html is missing');
+  // index.html has its own gate cap (1 MiB); check it before copying anything.
+  const indexSize = statSync(join(gameDir, 'index.html')).size;
+  if (indexSize > 1048576) fail('game/index.html is ' + indexSize + ' bytes, over the 1 MiB cap');
+  const game = countGameFiles(gameDir, '');
+  if (game.files > LIMITS.maxGameFiles) {
+    fail('game/ holds ' + game.files + ' files and directories, over the 993 cap');
   }
-}
-
-// How many bytes of source the dossier's text would carry before its cap: source files
-// are the ones buildDossier shows in full (a source extension, not under vendor/ and
-// not a *.min.js). Over the cap the dossier cuts the tail off, so warn instead of
-// discovering it on the leaderboard.
-const SOURCE_EXT = ['.html', '.js', '.mjs', '.css', '.glsl', '.vert', '.frag', '.wgsl', '.json'];
-function sourceTextBytes() {
-  let total = 0;
-  const stack = [''];
-  while (stack.length > 0) {
-    const rel = stack.pop();
-    const dir = rel === '' ? gameDir : join(gameDir, rel);
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = rel === '' ? entry.name : `${rel}/${entry.name}`;
-      if (entry.isDirectory()) {
-        if (entry.name !== 'vendor') stack.push(path);
-        continue;
-      }
-      const lower = entry.name.toLowerCase();
-      if (lower.endsWith('.min.js') || lower.endsWith('.min.mjs') || lower.endsWith('.min.css')) continue;
-      if (SOURCE_EXT.some((ext) => lower.endsWith(ext))) total += statSync(join(gameDir, path)).size;
-    }
+  if (game.bytes > LIMITS.maxGameBytes) {
+    fail('game/ is ' + game.bytes + ' bytes, over the 48 MiB cap');
   }
-  return total;
+  const shots = checkScreenshots(shotsDir);
+
+  mkdirSync(out, { recursive: true });
+  cpSync(gameDir, join(out, 'game'), { recursive: true });
+  mkdirSync(join(out, 'screenshots'), { recursive: true });
+  cpSync(shotsDir, join(out, 'screenshots'), { recursive: true });
+
+  writeFileSync(
+    join(out, 'dossier.json'),
+    buildDossier(out, {
+      text_max_bytes: LIMITS.textMaxBytes,
+      screenshots: { max: LIMITS.maxScreenshots, max_bytes: LIMITS.maxScreenshotBytes },
+      game_max_files: LIMITS.maxGameFiles,
+      game_max_bytes: LIMITS.maxGameBytes,
+      game_path_max_bytes: LIMITS.maxGamePathBytes,
+    }),
+  );
+  // The dossier has its own gate cap (1.5 MiB); refuse to hand in an
+  // over-size one instead of letting the scorer refuse the entry.
+  const dossierSize = statSync(join(out, 'dossier.json')).size;
+  if (dossierSize > 1572864) fail('dossier.json is ' + dossierSize + ' bytes, over the 1.5 MiB cap');
+
+  // A one-line receipt on stdout, so a human running it sees what was handed in.
+  console.log(
+    'palmera-bay: game/ ' + game.files + ' entries, ' + game.bytes + ' bytes; ' +
+    'screenshots ' + shots.join(', ') + '; dossier written to ' + join(out, 'dossier.json'),
+  );
 }
 
-const game = checkGameTree();
-const shots = checkScreenshots();
-
-// Start from a clean output directory so a stale file can never ride along.
-// Clear only what is inside it, never the directory itself: the grader
-// mounts /output, and deleting a mount point fails with EBUSY.
-mkdirSync(out, { recursive: true });
-for (const name of readdirSync(out)) rmSync(join(out, name), { recursive: true, force: true });
-copyTreeSorted(gameDir, join(out, 'game'));
-copyTreeSorted(shotsDir, join(out, 'screenshots'));
-
-// The dossier is built from the output itself, so it always matches what is handed in.
-const dossier = buildDossier(out, DOSSIER_CAPS);
-writeFileSync(join(out, 'dossier.json'), dossier);
-
-const gameBytes = game.bytes;
-const shotBytes = shots.reduce((n, name) => n + statSync(join(out, 'screenshots', name)).size, 0);
-console.log(`Palmera Bay handed in: game/ ${game.entries} entries, ${gameBytes} bytes; ` +
-  `screenshots/ ${shots.join(', ')} (${shotBytes} bytes); dossier.json ${dossier.length} bytes.`);
-console.log(`Cover screenshot: ${shots[0]}. Output: ${resolve(out)}`);
-const sourceBytes = sourceTextBytes();
-if (sourceBytes > DOSSIER_CAPS.text_max_bytes) {
-  console.log(`Note: the game's source is ${sourceBytes} bytes, over the dossier text cap of ` +
-    `${DOSSIER_CAPS.text_max_bytes} — the dossier cuts the tail of the last source file.`);
-} else {
-  console.log(`Source text: ${sourceBytes} bytes, inside the dossier text cap.`);
-}
+main();

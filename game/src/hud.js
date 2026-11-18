@@ -1,376 +1,441 @@
-// HUD, minimap and menus: money, health, wanted stars, weapon, speed, mission tracker,
-// a live minimap of the whole city, dialogue boxes, banners, and the title / pause /
-// busted / wasted / story-complete screens. All drawn on the same canvas.
-import { clamp, fmtMoney, fmtTime, TAU } from './util.js';
-import { CITY_SIZE, districtAt } from './city.js';
-import { MISSIONS } from './missions.js';
+// hud.js — everything drawn on top of the world: health and money, the wanted
+// stars, the mission objective, the minimap, the dialog box, banners, and the
+// title, pause, wasted and busted screens. All canvas-drawn so the screenshots
+// show exactly what a player sees.
 
-export function drawHUD(ctx, world, view) {
-  const { cw, ch } = view;
-  const p = world.player;
+import { clamp, moneyString, clockString } from './util.js';
+import { districtAt, WORLD_SIZE } from './city.js';
+import { missionObjectiveText, missionMarker, MISSION_DEFS } from './missions.js';
+
+export function drawHUD(ctx, state, canvas) {
+  const w = canvas.width;
+  const h = canvas.height;
+  const player = state.player;
+
+  // --- Top right: minimap -------------------------------------------------
+  drawMinimap(ctx, state, w - 218, 16, 202, 202);
+
+  // --- Top left: wanted stars ---------------------------------------------
+  drawStars(ctx, state.wanted, 22, 22);
+
+  // Location + clock, under the stars.
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-
-  // Top-left: cash + district + clock.
-  ctx.fillStyle = 'rgba(8,12,22,0.62)';
-  roundRect(ctx, 12, 12, 218, 74, 10); ctx.fill();
-  ctx.fillStyle = '#7ee787';
-  ctx.font = 'bold 26px system-ui, sans-serif';
-  ctx.fillText(fmtMoney(world.money), 24, 42);
-  ctx.fillStyle = '#dfe6f2';
-  ctx.font = '13px system-ui, sans-serif';
-  const d = districtAt(p.x, p.y);
-  ctx.fillText(d.name + '  •  ' + fmtTime(world.clock), 24, 64);
-  ctx.fillStyle = '#9fb2cc';
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.fillText('Palmera Bay', 24, 80);
-
-  // Top-right: wanted stars.
-  ctx.fillStyle = 'rgba(8,12,22,0.62)';
-  roundRect(ctx, cw - 212, 12, 200, 46, 10); ctx.fill();
-  ctx.font = 'bold 24px system-ui, sans-serif';
-  for (let i = 0; i < 5; i++) {
-    ctx.fillStyle = i < world.wanted ? '#ffd21f' : 'rgba(255,255,255,0.22)';
-    ctx.fillText('★', cw - 196 + i * 34, 38);
-  }
-  ctx.fillStyle = world.wanted > 0 ? '#ff6b6b' : '#9fb2cc';
-  ctx.font = 'bold 11px system-ui, sans-serif';
-  ctx.fillText(world.wanted > 0 ? 'WANTED' : 'CLEAN', cw - 196, 54);
-
-  // Bottom-left: health bar + weapon + armour.
-  ctx.fillStyle = 'rgba(8,12,22,0.62)';
-  roundRect(ctx, 12, ch - 78, 240, 66, 10); ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 12px system-ui, sans-serif';
-  ctx.fillText('RICO VANE', 24, ch - 56);
-  ctx.fillStyle = '#222';
-  ctx.fillRect(24, ch - 48, 200, 12);
-  ctx.fillStyle = p.health > 50 ? '#2ecc71' : p.health > 25 ? '#f39c12' : '#e74c3c';
-  ctx.fillRect(24, ch - 48, 200 * clamp(p.health / 100, 0, 1), 12);
-  ctx.fillStyle = '#fff';
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.fillText(Math.ceil(p.health) + ' HP', 228, ch - 38);
-  ctx.fillStyle = '#dfe6f2';
-  ctx.font = '13px system-ui, sans-serif';
-  ctx.fillText((p.weapon === 'pistol' ? 'Pistol' : 'Fists') + '  •  ' + (p.weapon === 'pistol' ? p.ammo + ' ammo' : 'melee') +
-    (p.car ? '  •  ' + p.car.model.name : ''), 24, ch - 20);
-
-  // Speedometer while driving.
-  if (p.car) {
-    const kmh = Math.round(Math.abs(p.car.speed) * 0.36);
-    ctx.fillStyle = 'rgba(8,12,22,0.62)';
-    roundRect(ctx, cw - 212, ch - 78, 200, 66, 10); ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 30px system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(kmh + '', cw - 40, ch - 40);
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText('km/h', cw - 24, ch - 40);
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#9fb2cc';
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText(p.car.health < 55 ? 'ENGINE SMOKING — FIND A NEW RIDE' : 'E — exit car', cw - 200, ch - 20);
-  }
-
-  // Mission tracker, top centre.
-  const obj = world.missions.objectiveText();
-  ctx.fillStyle = 'rgba(8,12,22,0.62)';
-  const ow = Math.min(cw - 480, 520);
-  roundRect(ctx, (cw - ow) / 2, 12, ow, 46, 10); ctx.fill();
-  ctx.fillStyle = '#ffd76e';
-  ctx.font = 'bold 13px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  const missionTitle = world.missions.index < MISSIONS.length ? MISSIONS[world.missions.index].title : 'Free Roam';
-  ctx.fillText('◆ ' + missionTitle.toUpperCase(), cw / 2, 30);
-  ctx.fillStyle = '#fff';
-  ctx.font = '12px system-ui, sans-serif';
-  ctx.fillText(obj.length > 72 ? obj.slice(0, 72) + '…' : obj, cw / 2, 48);
-  ctx.textAlign = 'left';
-
-  // Banner (mission passed / new mission).
-  if (world.missions.banner) {
-    const b = world.missions.banner;
-    ctx.globalAlpha = clamp(b.t, 0, 1);
-    ctx.fillStyle = 'rgba(8,12,22,0.72)';
-    roundRect(ctx, cw / 2 - 260, ch * 0.24, 520, 74, 12); ctx.fill();
-    ctx.fillStyle = '#ffd76e';
-    ctx.font = 'bold 30px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(b.text, cw / 2, ch * 0.24 + 36);
-    ctx.fillStyle = '#fff';
-    ctx.font = '15px system-ui, sans-serif';
-    ctx.fillText(b.sub, cw / 2, ch * 0.24 + 60);
-    ctx.textAlign = 'left';
-    ctx.globalAlpha = 1;
-  }
-
-  // Dialogue box.
-  if (world.missions.dialogue) {
-    const dl = world.missions.dialogue;
-    const [who, line] = dl.lines[dl.i];
-    ctx.fillStyle = 'rgba(8,12,22,0.82)';
-    roundRect(ctx, cw / 2 - 330, ch - 178, 660, 88, 12); ctx.fill();
-    ctx.fillStyle = who === 'RICO' ? '#2ec4b6' : who === 'DUKE' ? '#e74c3c' : '#ffd76e';
-    ctx.font = 'bold 14px system-ui, sans-serif';
-    ctx.fillText(who, cw / 2 - 312, ch - 150);
-    ctx.fillStyle = '#fff';
-    ctx.font = '15px system-ui, sans-serif';
-    wrapText(ctx, line, cw / 2 - 312, ch - 126, 624, 20);
-    ctx.fillStyle = '#9fb2cc';
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText('E / click — continue', cw / 2 + 312, ch - 100);
-    ctx.textAlign = 'left';
-  }
-
-  // Context hint.
-  if (world.hint) {
-    ctx.fillStyle = 'rgba(8,12,22,0.7)';
-    const w = ctx.measureText(world.hint).width + 24;
-    roundRect(ctx, cw / 2 - w / 2, ch - 226, w, 30, 8); ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 13px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(world.hint, cw / 2, ch - 206);
-    ctx.textAlign = 'left';
-  }
-
-  // Controls reminder, fading out after the first minute.
-  if (world.time < 60 && world.mode === 'playing' && !world.missions.dialogue) {
-    ctx.globalAlpha = clamp(60 - world.time, 0, 1) * 0.8;
-    ctx.fillStyle = 'rgba(8,12,22,0.6)';
-    roundRect(ctx, 12, 100, 250, 118, 10); ctx.fill();
-    ctx.fillStyle = '#dfe6f2';
-    ctx.font = '12px system-ui, sans-serif';
-    const lines = ['WASD / arrows — move & drive', 'Mouse — aim, click — shoot', 'E — enter / steal car, talk', 'Shift — sprint    Space — brake', 'P — pause    M — missions    H — help'];
-    lines.forEach((l, i) => ctx.fillText(l, 24, 122 + i * 20));
-    ctx.globalAlpha = 1;
-  }
-
-  drawMinimap(ctx, world, view);
-}
-
-export function drawMinimap(ctx, world, view) {
-  const { cw, ch } = view;
-  const size = 208;
-  const mx = cw - size - 14, my = ch - size - 14 - (world.player.car ? 0 : 0);
-  const scale = size / CITY_SIZE;
-  ctx.fillStyle = 'rgba(8,12,22,0.72)';
-  roundRect(ctx, mx - 6, my - 6, size + 12, size + 12, 10); ctx.fill();
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(mx, my, size, size);
-  ctx.clip();
-  // ground + beach
-  ctx.fillStyle = '#33502e';
-  ctx.fillRect(mx, my, size, size);
-  ctx.fillStyle = '#c9b078';
-  ctx.fillRect(mx, my + 3040 * scale, 1000 * scale, 160 * scale);
-  ctx.fillStyle = '#2f7fa8';
-  ctx.fillRect(mx, my + 3150 * scale, 1000 * scale, 50 * scale);
-  // roads
-  ctx.fillStyle = '#767c86';
-  for (const rx of [200, 600, 1000, 1400, 1800, 2200, 2600, 3000]) ctx.fillRect(mx + rx * scale - 2, my, 4, size);
-  for (const ry of [200, 600, 1000, 1400, 1800, 2200, 2600, 3000]) ctx.fillRect(mx, my + ry * scale - 2, size, 4);
-  // parks
-  ctx.fillStyle = '#4e7a3f';
-  for (const p of world.city.parks) ctx.fillRect(mx + p.x0 * scale, my + p.y0 * scale, (p.x1 - p.x0) * scale, (p.y1 - p.y0) * scale);
-  // mission marker
-  const mm = world.missions.missionMarker();
-  if (mm) {
-    const pulse = 4 + Math.sin(world.time * 5) * 1.5;
-    ctx.fillStyle = mm.start ? '#ffd76e' : '#ff5d8f';
-    ctx.beginPath(); ctx.arc(mx + mm.x * scale, my + mm.y * scale, pulse, 0, TAU); ctx.fill();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(mx + mm.x * scale, my + mm.y * scale, pulse + 3, 0, TAU); ctx.stroke();
-  }
-  // police blips
-  ctx.fillStyle = '#2d7dff';
-  for (const car of world.cars) {
-    if (car.police && !car.dead) {
-      ctx.beginPath(); ctx.arc(mx + car.x * scale, my + car.y * scale, 3.5, 0, TAU); ctx.fill();
-    }
-  }
-  // gang blips
-  ctx.fillStyle = '#c0392b';
-  for (const ped of world.peds) {
-    if (ped.gang && !ped.dead) {
-      ctx.beginPath(); ctx.arc(mx + ped.x * scale, my + ped.y * scale, 2.5, 0, TAU); ctx.fill();
-    }
-  }
-  // player arrow
-  const p = world.player;
-  const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
-  const ang = p.car ? p.car.angle : p.angle;
-  ctx.save();
-  ctx.translate(mx + px * scale, my + py * scale);
-  ctx.rotate(ang);
-  ctx.fillStyle = '#fff';
-  ctx.strokeStyle = '#111';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-5, -5); ctx.lineTo(-2, 0); ctx.lineTo(-5, 5); ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.restore();
-  // north + label
-  ctx.restore();
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 11px system-ui, sans-serif';
-  ctx.fillText('N', mx + size - 10, my + 12);
-  ctx.fillStyle = '#9fb2cc';
-  ctx.font = '10px system-ui, sans-serif';
-  ctx.fillText('PALMERA BAY', mx, my - 10 + size + 12);
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-function wrapText(ctx, text, x, y, maxW, lh) {
-  const words = text.split(' ');
-  let line = '', yy = y;
-  for (const w of words) {
-    const test = line ? line + ' ' + w : w;
-    if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, x, yy); line = w; yy += lh; }
-    else line = test;
-  }
-  if (line) ctx.fillText(line, x, yy);
-}
-
-// --- full-screen menus ---
-export function drawTitle(ctx, world, view) {
-  const { cw, ch } = view;
-  // Sun-soaked gradient sky + skyline silhouette behind the title.
-  const g = ctx.createLinearGradient(0, 0, 0, ch);
-  g.addColorStop(0, '#ff9e5e'); g.addColorStop(0.45, '#ff6b8a'); g.addColorStop(0.75, '#7a4a8c'); g.addColorStop(1, '#1c1440');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, cw, ch);
-  ctx.fillStyle = '#ffd76e';
-  ctx.beginPath(); ctx.arc(cw * 0.78, ch * 0.22, 54, 0, TAU); ctx.fill();
-  ctx.fillStyle = 'rgba(20,16,48,0.85)';
-  const base = ch * 0.82;
-  for (let i = 0; i < 24; i++) {
-    const bw = cw / 24;
-    const h = 40 + ((i * 137) % 130);
-    ctx.fillRect(i * bw, base - h, bw - 4, h);
-  }
-  ctx.fillStyle = 'rgba(20,16,48,0.55)';
-  ctx.fillRect(0, base, cw, ch - base);
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#fff';
+  ctx.textBaseline = 'top';
   ctx.font = 'bold 15px system-ui, sans-serif';
-  ctx.fillText('A SUN-SOAKED OPEN-WORLD CRIME STORY  •  AN ORIGINAL GAME — NOTHING FROM ROCKSTAR GAMES', cw / 2, ch * 0.16);
-  ctx.fillStyle = '#ffd76e';
-  ctx.font = 'bold 84px system-ui, sans-serif';
-  ctx.fillText('PALMERA BAY', cw / 2, ch * 0.30);
-  ctx.fillStyle = '#fff';
-  ctx.font = 'italic 22px Georgia, serif';
-  ctx.fillText('Rico Vane owes $20,000 to the Marlin Crew. The Bay is his to take — or to die in.', cw / 2, ch * 0.37);
-  const hasSave = !!world.saveSlot;
-  const items = [
-    (hasSave ? '▶  CONTINUE — ' + world.saveSlot.label : '▶  NEW GAME'),
-    'HOW TO PLAY',
-    'FREE ROAM (no missions)',
-  ];
-  const sel = world.menuSel || 0;
-  items.forEach((t, i) => {
-    const y = ch * 0.50 + i * 48;
-    if (i === sel) {
-      ctx.fillStyle = '#ffd76e';
-      roundRect(ctx, cw / 2 - 260, y - 32, 520, 42, 10); ctx.fill();
-      ctx.fillStyle = '#1c1440';
-    } else {
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-    }
-    ctx.font = 'bold 20px system-ui, sans-serif';
-    ctx.fillText(t, cw / 2, y);
-  });
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(16, 52, 210, 46);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(districtAt(player.x, player.y), 24, 58);
   ctx.font = '13px system-ui, sans-serif';
-  ctx.fillText('WASD move & drive  •  Mouse aim, click shoot  •  E steal car / talk  •  Shift sprint  •  P pause  •  M missions', cw / 2, ch * 0.78);
-  ctx.fillText('6 story missions  •  traffic & pedestrians  •  wanted levels & police chases  •  minimap  •  day & night  •  autosave', cw / 2, ch * 0.83);
-  ctx.textAlign = 'left';
-}
+  ctx.fillStyle = '#ffd76a';
+  ctx.fillText(clockString(state.timePlayed) + '   •   ' + state.missionsDone + '/' + MISSION_DEFS.length + ' jobs', 24, 78);
 
-export function drawOverlay(ctx, world, view, title, lines, accent) {
-  const { cw, ch } = view;
-  ctx.fillStyle = 'rgba(6,8,18,0.72)';
-  ctx.fillRect(0, 0, cw, ch);
-  ctx.textAlign = 'center';
-  ctx.fillStyle = accent || '#ffd76e';
-  ctx.font = 'bold 56px system-ui, sans-serif';
-  ctx.fillText(title, cw / 2, ch * 0.36);
-  ctx.fillStyle = '#fff';
-  ctx.font = '17px system-ui, sans-serif';
-  lines.forEach((l, i) => ctx.fillText(l, cw / 2, ch * 0.44 + i * 28));
-  ctx.fillStyle = '#9fb2cc';
-  ctx.font = '14px system-ui, sans-serif';
-  ctx.fillText('Press ENTER to continue', cw / 2, ch * 0.44 + lines.length * 28 + 30);
-  ctx.textAlign = 'left';
-}
+  // --- Bottom left: health + money ----------------------------------------
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(16, h - 96, 250, 80);
+  ctx.font = 'bold 15px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('LEO MARLOW', 26, h - 88);
+  // Health bar.
+  ctx.fillStyle = '#222';
+  ctx.fillRect(26, h - 66, 180, 12);
+  const hpFrac = clamp(player.health / player.maxHealth, 0, 1);
+  ctx.fillStyle = hpFrac > 0.5 ? '#2ecc71' : hpFrac > 0.25 ? '#f39c12' : '#e74c3c';
+  ctx.fillRect(26, h - 66, 180 * hpFrac, 12);
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.strokeRect(26, h - 66, 180, 12);
+  ctx.font = '13px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(Math.ceil(player.health) + ' HP', 212, h - 68);
+  // Money.
+  ctx.font = 'bold 20px system-ui, sans-serif';
+  ctx.fillStyle = '#7dff8a';
+  ctx.fillText(moneyString(state.money), 26, h - 38);
 
-export function drawPause(ctx, world, view) {
-  drawOverlay(ctx, world, view, 'PAUSED', [
-    'Mission: ' + (world.missions.index < MISSIONS.length ? MISSIONS[world.missions.index].title : 'Free roam'),
-    'Cash: ' + fmtMoney(world.money) + '   •   Missions done: ' + world.missionsDone,
-    'H — help    •    S — save now    •    P / Esc — resume',
-  ], '#7ee7ff');
-}
+  // --- Bottom right: vehicle / weapon --------------------------------------
+  if (player.car) {
+    const car = player.car;
+    const kmh = Math.round(Math.abs(car.speed) * 0.32);
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(w - 226, h - 96, 210, 80);
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(car.model.toUpperCase(), w - 216, h - 88);
+    ctx.font = 'bold 26px system-ui, sans-serif';
+    ctx.fillText(kmh + ' km/h', w - 216, h - 62);
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillText('E — exit car', w - 216, h - 28);
+    // Car health.
+    ctx.fillStyle = '#222';
+    ctx.fillRect(w - 216, h - 44, 120, 6);
+    ctx.fillStyle = car.health > 40 ? '#2ecc71' : '#e74c3c';
+    ctx.fillRect(w - 216, h - 44, 120 * clamp(car.health / 100, 0, 1), 6);
+  } else {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(w - 226, h - 96, 210, 80);
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('PISTOL  ∞', w - 216, h - 88);
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = '#cfd8dc';
+    ctx.fillText('Click — shoot    F — punch', w - 216, h - 66);
+    ctx.fillText('E — enter car    Shift — run', w - 216, h - 44);
+  }
 
-export function drawHelp(ctx, world, view) {
-  const { cw, ch } = view;
-  ctx.fillStyle = 'rgba(6,8,18,0.88)';
-  ctx.fillRect(0, 0, cw, ch);
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffd76e';
-  ctx.font = 'bold 34px system-ui, sans-serif';
-  ctx.fillText('HOW TO PLAY', cw / 2, 70);
-  ctx.fillStyle = '#fff';
-  ctx.font = '16px system-ui, sans-serif';
-  const lines = [
-    'ON FOOT: WASD or arrows to walk, Shift to sprint. Mouse aims, click shoots the pistol.',
-    'DRIVING: W accelerate, S brake / reverse, A D steer, Space handbrake. E exits the car.',
-    'STEALING: walk up to any parked or slow car and press E. If a cop sees you, expect stars.',
-    'WANTED: stars rise when you steal, shoot or hit people. Lose the cops by breaking line of sight,',
-    'then hide until the stars fade. At 3+ stars, Bay PD sends interceptors and roadblocks.',
-    'MISSIONS: follow the pink diamond on the map. Talk with E. Finish all six to become King of the Bay.',
-    'COMBAT: gang members fight back. Your health regens slowly; grab red crosses to heal fast.',
-    'SAVE: the game autosaves after every mission. Press S any time to save. Progress lives in this browser.',
-    'SIDE HUSTLES: green cash bags pay $150, health kits heal, blue crates give armour. Taxis pay fares —',
-    'steal a taxi and drive passengers to their marker for quick cash.',
-  ];
-  lines.forEach((l, i) => ctx.fillText(l, cw / 2, 120 + i * 30));
-  ctx.fillStyle = '#9fb2cc';
-  ctx.font = '14px system-ui, sans-serif';
-  ctx.fillText('Press H or Esc to close', cw / 2, ch - 40);
-  ctx.textAlign = 'left';
-}
+  // --- Objective line, top centre ------------------------------------------
+  const objective = missionObjectiveText(state);
+  if (objective) {
+    ctx.font = 'bold 16px system-ui, sans-serif';
+    const tw = ctx.measureText(objective).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(w / 2 - tw / 2 - 16, 14, tw + 32, 30);
+    ctx.fillStyle = '#ffd76a';
+    ctx.textAlign = 'center';
+    ctx.fillText(objective, w / 2, 22);
+    ctx.textAlign = 'left';
+  }
 
-export function drawMissionList(ctx, world, view) {
-  const { cw, ch } = view;
-  ctx.fillStyle = 'rgba(6,8,18,0.88)';
-  ctx.fillRect(0, 0, cw, ch);
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffd76e';
-  ctx.font = 'bold 34px system-ui, sans-serif';
-  ctx.fillText('MISSIONS — THE RICO VANE STORY', cw / 2, 70);
-  MISSIONS.forEach((m, i) => {
-    const y = 120 + i * 56;
-    const done = i < world.missions.index;
-    const cur = i === world.missions.index && world.missions.index < MISSIONS.length;
-    ctx.fillStyle = done ? '#2ecc71' : cur ? '#ffd76e' : '#5a6a82';
-    ctx.font = 'bold 18px system-ui, sans-serif';
-    ctx.fillText((done ? '✓  ' : cur ? '▶  ' : '○  ') + (i + 1) + '. ' + m.title + '  —  $' + m.reward.toLocaleString('en-US'), cw / 2, y);
-    ctx.fillStyle = '#c8d2e0';
+  // --- Next-mission hint ----------------------------------------------------
+  if (!state.mission && state.missionIndex < MISSION_DEFS.length && state.mode === 'playing') {
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    const msg = 'Press M to start the next job: ' + MISSION_DEFS[state.missionIndex].title;
+    const tw = ctx.measureText(msg).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(w / 2 - tw / 2 - 14, 52, tw + 28, 28);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.fillText(msg, w / 2, 60);
+    ctx.textAlign = 'left';
+  }
+
+  // --- Busted warning --------------------------------------------------------
+  if (player.bustedTimer > 0.3 && state.mode === 'playing') {
+    ctx.font = 'bold 22px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ff5252';
+    ctx.fillText('THE COPS ARE ON YOU — RUN!', w / 2, h - 120);
+    ctx.textAlign = 'left';
+  }
+
+  // --- Banner -----------------------------------------------------------------
+  if (state.banner && state.banner.t > 0) {
+    const alpha = clamp(state.banner.t, 0, 1);
+    ctx.globalAlpha = alpha;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 30px system-ui, sans-serif';
+    const colors = { mission: '#ffd76a', success: '#7dff8a', wanted: '#ff5252', fail: '#ff5252', info: '#ffffff' };
+    ctx.fillStyle = colors[state.banner.kind] || '#ffffff';
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 5;
+    ctx.strokeText(state.banner.text, w / 2, h * 0.28);
+    ctx.fillText(state.banner.text, w / 2, h * 0.28);
+    if (state.banner.sub) {
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeText(state.banner.sub, w / 2, h * 0.28 + 36);
+      ctx.fillText(state.banner.sub, w / 2, h * 0.28 + 36);
+    }
+    ctx.textAlign = 'left';
+    ctx.globalAlpha = 1;
+  }
+
+  // --- Dialog box ---------------------------------------------------------------
+  if (state.dialog) {
+    const line = state.dialog.lines[state.dialog.index];
+    const boxH = 118;
+    ctx.fillStyle = 'rgba(10,12,20,0.88)';
+    ctx.fillRect(w / 2 - 330, h - boxH - 110, 660, boxH);
+    ctx.strokeStyle = '#ffd76a';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(w / 2 - 330, h - boxH - 110, 660, boxH);
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillStyle = '#ffd76a';
+    ctx.fillText(line.who.toUpperCase(), w / 2 - 312, h - boxH - 84);
+    ctx.font = '16px system-ui, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    wrapText(ctx, line.text, w / 2 - 312, h - boxH - 58, 624, 22);
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = '#9aa5b1';
+    ctx.textAlign = 'right';
+    ctx.fillText('E / Click — continue', w / 2 + 312, h - 122);
+    ctx.textAlign = 'left';
+  }
+
+  // --- Controls reminder (first minute) ----------------------------------------
+  if (state.timePlayed < 45 && !state.dialog && state.mode === 'playing') {
     ctx.font = '13px system-ui, sans-serif';
-    ctx.fillText(m.intro[0][1], cw / 2, y + 20);
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.textAlign = 'center';
+    ctx.fillText('WASD move  •  Mouse aim  •  Click shoot  •  E enter car  •  M mission  •  P pause  •  H mute', w / 2, h - 12);
+    ctx.textAlign = 'left';
+  }
+}
+
+function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+  const words = text.split(' ');
+  let line = '';
+  let yy = y;
+  for (const word of words) {
+    const test = line ? line + ' ' + word : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      ctx.fillText(line, x, yy);
+      line = word;
+      yy += lineHeight;
+    } else {
+      line = test;
+    }
+  }
+  ctx.fillText(line, x, yy);
+}
+
+function drawStars(ctx, wanted, x, y) {
+  for (let i = 0; i < 5; i++) {
+    drawStar(ctx, x + i * 26 + 11, y + 11, 11, i < wanted ? '#ffd21f' : 'rgba(255,255,255,0.25)');
+  }
+}
+
+function drawStar(ctx, cx, cy, r, color) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+    const rad = i % 2 === 0 ? r : r * 0.45;
+    const px = cx + Math.cos(ang) * rad;
+    const py = cy + Math.sin(ang) * rad;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+// --- Minimap -------------------------------------------------------------------
+function drawMinimap(ctx, state, x, y, w, h) {
+  const scale = w / WORLD_SIZE;
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,12,18,0.82)';
+  ctx.fillRect(x - 4, y - 4, w + 8, h + 8);
+  ctx.strokeStyle = '#ffd76a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x - 4, y - 4, w + 8, h + 8);
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+
+  // Ground.
+  ctx.fillStyle = '#3f6b4f';
+  ctx.fillRect(x, y, w, h);
+  // Beach + sea.
+  const beachY = y + (3320 * scale);
+  ctx.fillStyle = '#e8d29a';
+  ctx.fillRect(x, beachY, w, h - (beachY - y));
+  ctx.fillStyle = '#2f7fb8';
+  ctx.fillRect(x, y + (3480 * scale), w, h - (3480 * scale - 0));
+  // Roads.
+  ctx.fillStyle = '#5a5a5a';
+  for (let c = 0; c <= WORLD_SIZE; c += 400) {
+    ctx.fillRect(x + c * scale - 2, y, 4, h);
+    ctx.fillRect(x, y + c * scale - 2, w, 4);
+  }
+  // Downtown blocks.
+  ctx.fillStyle = '#8a7a68';
+  ctx.fillRect(x + 1200 * scale, y + 800 * scale, 1200 * scale, 1200 * scale);
+  // Mission marker.
+  const marker = missionMarker(state);
+  if (marker) {
+    const pulse = 5 + 3 * Math.sin(state.time * 5);
+    ctx.fillStyle = '#ffd21f';
+    ctx.beginPath();
+    ctx.arc(x + marker.x * scale, y + marker.y * scale, pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+  // Police blips (red/blue) and traffic (white dots).
+  for (const car of state.cars) {
+    if (car.health <= 0) continue;
+    if (car.police) {
+      ctx.fillStyle = (Math.floor(state.time * 4) % 2 === 0) ? '#ff4040' : '#4080ff';
+      ctx.fillRect(x + car.x * scale - 3, y + car.y * scale - 3, 6, 6);
+    }
+  }
+  // Player arrow.
+  const px = x + state.player.x * scale;
+  const py = y + state.player.y * scale;
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(state.player.angle);
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(7, 0);
+  ctx.lineTo(-5, -5);
+  ctx.lineTo(-5, 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+  // North label.
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 11px system-ui, sans-serif';
+  ctx.fillText('N', x + 6, y + 14);
+  ctx.restore();
+}
+
+// --- Screens -------------------------------------------------------------------
+
+export function drawTitle(ctx, state, canvas) {
+  const w = canvas.width;
+  const h = canvas.height;
+  // Sunset gradient sky over a drawn skyline.
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#ff9a56');
+  grad.addColorStop(0.45, '#ff6b6b');
+  grad.addColorStop(0.75, '#7b2d8b');
+  grad.addColorStop(1, '#1c2733');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  // Sun.
+  ctx.fillStyle = '#ffd76a';
+  ctx.beginPath();
+  ctx.arc(w * 0.72, h * 0.30, 64, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,215,106,0.25)';
+  ctx.beginPath();
+  ctx.arc(w * 0.72, h * 0.30, 92, 0, Math.PI * 2);
+  ctx.fill();
+  // Skyline silhouettes.
+  ctx.fillStyle = 'rgba(20,16,32,0.85)';
+  const buildings = [0.06, 0.16, 0.1, 0.22, 0.14, 0.26, 0.12, 0.2, 0.09, 0.24, 0.15];
+  let bx = 0;
+  const bw = w / buildings.length;
+  for (const bh of buildings) {
+    const height = h * bh * 2.2;
+    ctx.fillRect(bx, h * 0.62 - height, bw * 0.86, height + h * 0.4);
+    bx += bw;
+  }
+  // Palm silhouettes.
+  ctx.strokeStyle = 'rgba(20,16,32,0.9)';
+  ctx.lineWidth = 6;
+  for (const px of [w * 0.12, w * 0.88, w * 0.3]) {
+    ctx.beginPath();
+    ctx.moveTo(px, h * 0.62);
+    ctx.quadraticCurveTo(px + 8, h * 0.5, px + 26, h * 0.46);
+    ctx.stroke();
+  }
+  // Title.
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 84px system-ui, sans-serif';
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = 18;
+  ctx.fillText('PALMERA BAY', w / 2, h * 0.30);
+  ctx.font = 'bold 26px system-ui, sans-serif';
+  ctx.fillStyle = '#ffd76a';
+  ctx.fillText('AN OPEN-WORLD CRIME STORY', w / 2, h * 0.30 + 44);
+  ctx.shadowBlur = 0;
+  ctx.font = '17px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('Leo Marlow is home. The city owes him — and he intends to collect.', w / 2, h * 0.30 + 82);
+
+  // Menu.
+  const items = state.hasSave
+    ? ['CONTINUE', 'NEW GAME', 'HOW TO PLAY']
+    : ['NEW GAME', 'HOW TO PLAY'];
+  const startY = h * 0.56;
+  items.forEach((item, i) => {
+    const selected = i === state.menuIndex;
+    ctx.font = 'bold 24px system-ui, sans-serif';
+    if (selected) {
+      ctx.fillStyle = '#ffd76a';
+      ctx.fillText('▸ ' + item, w / 2, startY + i * 46);
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText(item, w / 2, startY + i * 46);
+    }
   });
-  ctx.fillStyle = '#9fb2cc';
   ctx.font = '14px system-ui, sans-serif';
-  ctx.fillText('Press M or Esc to close', cw / 2, ch - 40);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText('↑ ↓ choose   •   Enter select   •   WASD move, mouse aim, E enter car, M mission', w / 2, h - 36);
+  ctx.textAlign = 'left';
+}
+
+export function drawHowTo(ctx, canvas) {
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.fillStyle = 'rgba(8,10,16,0.92)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd76a';
+  ctx.font = 'bold 34px system-ui, sans-serif';
+  ctx.fillText('HOW TO PLAY', w / 2, 90);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '17px system-ui, sans-serif';
+  const lines = [
+    'WASD / Arrows — walk or drive (Shift to sprint, Space to handbrake)',
+    'Mouse — aim on foot. Left click — shoot. F — punch.',
+    'E — enter / steal a car, talk to people, grab the cash.',
+    'M — start the next story mission. Follow the yellow marker.',
+    'Stealing cars, hurting people and shooting cops raise your wanted level.',
+    'Police cruisers chase you — lose them and the heat cools off.',
+    'P / Esc — pause. H — mute. The game autosaves after every mission.',
+    '',
+    'Win the story: finish all four jobs for Eddie Voss and own the Bay.',
+  ];
+  lines.forEach((line, i) => ctx.fillText(line, w / 2, 150 + i * 34));
+  ctx.font = '15px system-ui, sans-serif';
+  ctx.fillStyle = '#9aa5b1';
+  ctx.fillText('Esc / Enter — back to the title screen', w / 2, h - 60);
+  ctx.textAlign = 'left';
+}
+
+export function drawPause(ctx, canvas) {
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.fillStyle = 'rgba(8,10,16,0.72)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 44px system-ui, sans-serif';
+  ctx.fillText('PAUSED', w / 2, h * 0.38);
+  ctx.font = '17px system-ui, sans-serif';
+  ctx.fillStyle = '#cfd8dc';
+  ctx.fillText('P / Esc — resume      S — save game      H — mute      Q — quit to title', w / 2, h * 0.38 + 44);
+  ctx.fillStyle = '#ffd76a';
+  ctx.font = '15px system-ui, sans-serif';
+  ctx.fillText('Progress autosaves after every mission. Your save lives in this browser.', w / 2, h * 0.38 + 78);
+  ctx.textAlign = 'left';
+}
+
+export function drawEndScreen(ctx, state, canvas, kind) {
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.fillStyle = kind === 'dead' ? 'rgba(40,4,4,0.82)' : 'rgba(4,10,40,0.82)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = kind === 'dead' ? '#ff5252' : '#6ea8ff';
+  ctx.font = 'bold 72px system-ui, sans-serif';
+  ctx.fillText(kind === 'dead' ? 'WASTED' : 'BUSTED', w / 2, h * 0.38);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '18px system-ui, sans-serif';
+  const reason = kind === 'dead'
+    ? 'Leo Marlow did not survive Palmera Bay.'
+    : 'The Palmera Bay PD finally caught up with Leo.';
+  ctx.fillText(reason, w / 2, h * 0.38 + 40);
+  ctx.font = '16px system-ui, sans-serif';
+  ctx.fillStyle = '#cfd8dc';
+  ctx.fillText('Jobs done: ' + state.missionsDone + '    •    Money kept: ' + moneyString(Math.floor(state.money * 0.8)) + '    •    Time: ' + clockString(state.timePlayed), w / 2, h * 0.38 + 84);
+  ctx.fillStyle = '#ffd76a';
+  ctx.font = 'bold 20px system-ui, sans-serif';
+  ctx.fillText('Enter — respawn at the hospital (keep 80% of your cash)', w / 2, h * 0.38 + 140);
+  ctx.font = '15px system-ui, sans-serif';
+  ctx.fillStyle = '#9aa5b1';
+  ctx.fillText('Q — quit to the title screen', w / 2, h * 0.38 + 172);
   ctx.textAlign = 'left';
 }
